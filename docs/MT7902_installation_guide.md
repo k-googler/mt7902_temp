@@ -148,13 +148,102 @@ sudo systemctl enable mt7902.service
 
 ## 5. 커널 업데이트 후 재적용
 
-리눅스 커널 패키지가 판올림(예: `6.17.0-20` -> `6.17.0-21`)되면 기존에 컴파일한 `.ko` 모듈들이 새 커널 버전과 안 맞아서 로드가 안 되게 됩니다. 그때는 다음 명령만 수행하면 됩니다.
+> [!IMPORTANT]
+> **Ubuntu 소프트웨어 업데이트 후 재부팅했더니 WiFi가 안 된다면, 100% 이 케이스입니다.**
+> 커널 버전이 올라갈 때마다 반드시 드라이버를 **그 커널에 맞게 재빌드**해야 합니다.
 
-1. 재부팅 후 테더링 등으로 인터넷 연결
-2. `sudo apt install linux-headers-$(uname -r)`
-3. 위 문서의 **2.2 빌드 에러 조치** (새 커널 헤더 폴더에 airoha_offload.h 스텁 복사) 부분 실행
-4. `cd ~/dev/mt7902_temp/latest`
-5. `make clean && make module_compile`
-6. 생성된 5개 `.ko` 파일들을 `sudo cp` 로 `/lib/modules/mt7902_custom/` 에 덮어쓰기
-7. 스크립트 실행 테스트: `sudo /usr/local/bin/mt7902-setup.sh`
-8. 완료되면 재부팅하거나 즉시 와이파이 사용 가능.
+### 5.1 왜 이 문제가 생기나?
+
+리눅스 커널 모듈(`.ko` 파일)은 **컴파일된 커널 버전에서만** 로드될 수 있습니다. Ubuntu가 커널을 업데이트하면(예: `6.17.0-20` → `6.17.0-22`), 이전 커널에서 빌드된 `.ko` 파일은 새 커널에서 로드 거부됩니다.
+
+**증상 체크리스트:**
+- Ubuntu 소프트웨어 업데이트 후 재부팅했더니 WiFi 어댑터가 없어짐
+- `systemctl status mt7902.service` 에서 `failed` 상태
+- 로그에 다음 에러 포함:
+  ```
+  insmod: ERROR: could not insert module /lib/modules/mt7902_custom/mt76.ko: Invalid parameters
+  insmod: ERROR: could not insert module ... mt76-connac-lib.ko: Unknown symbol in module
+  ```
+- `modinfo /lib/modules/mt7902_custom/mt76.ko | grep vermagic` 결과가 현재 `uname -r` 과 다름
+
+### 5.2 빠른 해결 (권장) — `fix_my_wifi.sh` 한 번 실행
+
+```bash
+# 1. 먼저 인터넷 연결 확보 (USB 테더링 등)
+#    → 커널 헤더가 이미 설치되어 있으면 인터넷 불필요
+
+# 2. 스크립트 한 줄 실행
+cd ~/dev/mt7902_temp && sudo ./fix_my_wifi.sh
+```
+
+> `fix_my_wifi.sh` 가 빌드 → 모듈 설치 → 서비스 재시작까지 자동으로 처리합니다.
+
+### 5.3 수동 해결 (단계별)
+
+인터넷이 이미 가능하거나, 커널 헤더가 설치된 경우:
+
+```bash
+# (선택) 커널 헤더가 없으면 먼저 설치
+sudo apt install linux-headers-$(uname -r)
+
+# 재빌드
+cd ~/dev/mt7902_temp/latest
+make clean && make module_compile
+
+# 새 모듈 교체
+sudo cp ~/dev/mt7902_temp/latest/*.ko /lib/modules/mt7902_custom/
+sudo cp ~/dev/mt7902_temp/latest/mt7921/*.ko /lib/modules/mt7902_custom/
+
+# 서비스 재시작 (즉시 WiFi 복구)
+sudo systemctl restart mt7902.service
+
+# 상태 확인
+systemctl status mt7902.service
+```
+
+성공 시 `Active: active (exited)` / `status=0/SUCCESS` 가 표시됩니다.
+
+### 5.4 앞으로 재발하지 않으려면
+
+매번 수동으로 해결해야 하는 근본 원인은 제거할 수 없습니다(커널 업데이트마다 재빌드 필요). 하지만 다음을 습관화하면 당황하지 않습니다:
+
+| 상황 | 대처 |
+|------|------|
+| Ubuntu 업데이트 알림 → 업데이트 실행 | 재부팅 전에 마음의 준비 |
+| 재부팅 후 WiFi 없음 | USB 테더링 연결 후 `fix_my_wifi.sh` 실행 |
+| 커널 헤더 이미 설치됨 | 인터넷 없이도 바로 재빌드 가능 |
+
+> [!TIP]
+> `sudo apt install linux-headers-$(uname -r)` 은 보통 커널 업데이트 직후 자동으로 설치됩니다. 따라서 **대부분의 경우 테더링 없이도 재빌드 가능합니다.** 먼저 시도해 보세요.
+
+---
+
+## 6. 실제 트러블슈팅 사례
+
+### 사례 1 — 2026-04-14: 커널 업데이트 후 WiFi 불능
+
+**환경**: ASUS Vivobook Go / Ubuntu 25.10
+
+**경위**: Ubuntu 소프트웨어 업데이트 후 재부팅 → WiFi 어댑터 미인식
+
+**진단**:
+```bash
+$ systemctl status mt7902.service
+# → failed / "Invalid parameters", "Unknown symbol in module"
+
+$ modinfo /lib/modules/mt7902_custom/mt76.ko | grep vermagic
+# → vermagic: 6.17.0-20-generic  ← 이전 커널
+
+$ uname -r
+# → 6.17.0-22-generic  ← 현재 커널 (불일치!)
+```
+
+**원인**: 커널이 `6.17.0-20` → `6.17.0-22` 로 업데이트됐으나 `.ko` 모듈이 재빌드 안 됨
+
+**해결**:
+1. 커널 헤더가 이미 설치되어 있었으므로 인터넷 불필요
+2. `make clean && make module_compile` 으로 재빌드 (성공)
+3. 새 `.ko` 파일 `/lib/modules/mt7902_custom/` 에 복사
+4. `systemctl restart mt7902.service` → `active (exited)` / SUCCESS
+5. WiFi 복구 확인: `wlp2s0` 이 `WeVO_5G` 에 정상 연결됨
+
