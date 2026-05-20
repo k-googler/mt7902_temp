@@ -247,3 +247,31 @@ $ uname -r
 4. `systemctl restart mt7902.service` → `active (exited)` / SUCCESS
 5. WiFi 복구 확인: `wlp2s0` 이 `WeVO_5G` 에 정상 연결됨
 
+### 사례 2 — 2026-05-20: Ubuntu 26.04 LTS (커널 7.0) 판올림 후 WiFi 불능 및 권한 오류
+
+**환경**: ASUS Vivobook Go / Ubuntu 26.04 LTS
+
+**경위**: OS가 Ubuntu 26.04 LTS로 판올림 됨. 재부팅 후 WiFi 어댑터 미인식.
+
+**진단**:
+```bash
+$ uname -r
+# → 7.0.0-15-generic  ← 메이저 커널 업데이트!
+$ systemctl status mt7902.service
+# → "Invalid module format" 에러 (이전 6.17 커널 빌드본이 안 맞음)
+```
+
+**원인 및 특이사항**:
+1. 커널 버전이 `6.17.x`에서 `7.0.0`으로 대폭 상승하여 기존 `.ko` 모듈 로드 거부됨.
+2. `fix_my_wifi.sh` 스크립트를 실행하려 했으나 `허가 거부 (os error 13)` 발생. (스크립트에 실행 권한(`chmod +x`)이 없었음)
+
+**해결**:
+1. 커널 헤더가 이미 설치되어 있어 바로 재빌드 가능 확인.
+2. 스크립트 실행 권한 부여 후 실행:
+   ```bash
+   chmod +x ~/dev/mt7902_temp/fix_my_wifi.sh
+   cd ~/dev/mt7902_temp && sudo ./fix_my_wifi.sh
+   ```
+   (또는 `sudo bash ./fix_my_wifi.sh` 로 직접 bash 인터프리터로 실행)
+3. 커널 7.0 버전에서도 에러 없이 성공적으로 모듈이 빌드됨.
+4. 서비스 자동 재시작 및 WiFi 복구 성공.
